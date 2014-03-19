@@ -10,6 +10,7 @@ char my_sasl_hostname[1025];
 #ifdef HAVE_SASL_CB_GETCONF
 /* The locations we may search for a SASL config file if the user didn't
  * specify one in the environment variable SASL_CONF_PATH
+ * 简单认证与安全层(SASL) 是一个在网络协议中用来认证和数据加密的构架。
  */
 const char * const locations[] = {
     "/etc/sasl/memcached.conf",

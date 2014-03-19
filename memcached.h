@@ -3,6 +3,7 @@
 /** \file
  * The main memcached header holding commonly used data
  * structures and function prototypes.
+ * 该头文件主要保存的常用的数据结构和函数原型。
  */
 
 #ifdef HAVE_CONFIG_H
@@ -23,7 +24,7 @@
 
 #include "sasl_defs.h"
 
-/** Maximum length of a key. */
+/** Maximum length of a key. key最大长度*/
 #define KEY_MAX_LENGTH 250
 
 /** Size of an incr buf. */
@@ -138,6 +139,7 @@ typedef void (*ADD_STAT)(const char *key, const uint16_t klen,
  */
 /**
  * Possible states of a connection.
+ * 保存每个连接的状态
  */
 enum conn_states {
     conn_listening,  /**< the socket which listens for connections */
@@ -205,7 +207,7 @@ enum delta_result_type {
 /** Time relative to server start. Smaller than time_t on 64-bit systems. */
 typedef unsigned int rel_time_t;
 
-/** Stats stored per slab (and per thread). */
+/** Stats stored per slab (and per thread). 保存每个slab和每个进程的状态。*/
 struct slab_stats {
     uint64_t  set_cmds;
     uint64_t  get_hits;
@@ -219,6 +221,7 @@ struct slab_stats {
 
 /**
  * Stats stored per-thread.
+ * 进程统计信息
  */
 struct thread_stats {
     pthread_mutex_t   mutex;
@@ -241,6 +244,7 @@ struct thread_stats {
 
 /**
  * Global stats.
+ * 全局的统计信息
  */
 struct stats {
     pthread_mutex_t mutex;
@@ -279,6 +283,7 @@ struct stats {
 /* When adding a setting, be sure to update process_stat_settings */
 /**
  * Globally accessible settings as derived from the commandline.
+ * 保存命令行传过来的配置信息
  */
 struct settings {
     size_t maxbytes;
@@ -327,6 +332,7 @@ extern struct settings settings;
 
 /**
  * Structure for storing items within memcached.
+ * memcached中存贮数据的结构体
  */
 typedef struct _stritem {
     struct _stritem *next;
@@ -352,6 +358,9 @@ typedef struct _stritem {
     /* then data with terminating \r\n (no terminating null; it's binary!) */
 } item;
 
+/**
+ * LIBEVENT进程结构体
+ */
 typedef struct {
     pthread_t thread_id;        /* unique ID of this thread */
     struct event_base *base;    /* libevent handle this thread uses */
@@ -371,6 +380,7 @@ typedef struct {
 
 /**
  * The structure representing a connection into memcached.
+ * 该结构体代表memcached中的一个连接
  */
 typedef struct conn conn;
 struct conn {

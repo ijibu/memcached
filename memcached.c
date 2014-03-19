@@ -4864,15 +4864,18 @@ int main (int argc, char **argv) {
     }
 
     /* handle SIGINT */
+    /* 处理信号量 */
     signal(SIGINT, sig_handler);
 
     /* init settings */
+    /* 初始化settings结构 */
     settings_init();
 
     /* set stderr non-buffering (for running under, say, daemontools) */
     setbuf(stderr, NULL);
 
     /* process arguments */
+    /* getopt处理命令行参数信息 */
     while (-1 != (c = getopt(argc, argv,
           "a:"  /* access mask for unix socket */
           "A"  /* enable admin shutdown commannd */
@@ -5245,6 +5248,7 @@ int main (int argc, char **argv) {
     }
 
     /* daemonize if requested */
+    /* 是否需要daemon守护模式运行 */
     /* if we want to ensure our ability to dump core, don't chdir to / */
     if (do_daemonize) {
         if (sigignore(SIGHUP) == -1) {
@@ -5257,6 +5261,7 @@ int main (int argc, char **argv) {
     }
 
     /* lock paged memory if needed */
+    /* 如果需要禁止对进程进行分页 */
     if (lock_memory) {
 #ifdef HAVE_MLOCKALL
         int res = mlockall(MCL_CURRENT | MCL_FUTURE);
@@ -5270,9 +5275,11 @@ int main (int argc, char **argv) {
     }
 
     /* initialize main thread libevent instance */
+    /* 初始化主线程的libevent实例 */
     main_base = event_init();
 
     /* initialize other stuff */
+    /* 其他东西的初始化 */
     stats_init();
     assoc_init(settings.hashpower_init);
     conn_init();
@@ -5281,12 +5288,14 @@ int main (int argc, char **argv) {
     /*
      * ignore SIGPIPE signals; we can use errno == EPIPE if we
      * need that information
+     * 忽略管道信号
      */
     if (sigignore(SIGPIPE) == -1) {
         perror("failed to ignore SIGPIPE; sigaction");
         exit(EX_OSERR);
     }
     /* start up worker threads if MT mode */
+    /* 启动多线程模式的多个worker线程 */
     thread_init(settings.num_threads, main_base);
 
     if (start_assoc_maintenance_thread() == -1) {
