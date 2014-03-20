@@ -139,7 +139,7 @@ typedef void (*ADD_STAT)(const char *key, const uint16_t klen,
  */
 /**
  * Possible states of a connection.
- * 保存每个连接的状态
+ * 保存每个连接的状态,是memcached运转发动机，它根据链接的不同状态而采取不同的行为
  */
 enum conn_states {
     conn_listening,  /**< the socket which listens for connections */
@@ -359,7 +359,8 @@ typedef struct _stritem {
 } item;
 
 /**
- * LIBEVENT进程结构体
+ * LIBEVENT进程结构体(memcached线程结构的封装结构)
+ *  每个线程都包含一个CQ队列，一条通知管道pipe ，一个libevent的实例event_base等。
  */
 typedef struct {
     pthread_t thread_id;        /* unique ID of this thread */
@@ -380,7 +381,9 @@ typedef struct {
 
 /**
  * The structure representing a connection into memcached.
- * 该结构体代表memcached中的一个连接
+ * 该结构体代表memcached中的一个网络连接的封装
+ * 由于这个结构太大，就略去中间的成员不展示了，与我们线程池相关的有一个成员则非常关键，那就是state，
+ * 它是memcached中状态机驱动的关键（由drive_machine函数实现）。
  */
 typedef struct conn conn;
 struct conn {

@@ -19,6 +19,11 @@
 #define ITEMS_PER_ALLOC 64
 
 /* An item in the connection queue. */
+/*
+ * 连接项结构体
+ *  CQ_ITEM实际上是主线程accept后返回的已建立连接的fd的封装,由主线程创建初始化并放入连接链表CQ中，共workers线程使用。
+ *  可以将这个结构体看着是主线程accept触发时即有客户端连入时，主线程写入工作线程有关socket连接相关句柄数据结构，绑定了socket描述符、状态、发生的事件、读buffer大小等
+ */
 typedef struct conn_queue_item CQ_ITEM;
 struct conn_queue_item {
     int               sfd;
@@ -30,6 +35,10 @@ struct conn_queue_item {
 };
 
 /* A connection queue. */
+/*
+ * 线程连接队列
+ *  每个线程结构体中都指向一个CQ链表，CQ链表管理CQ_ITEM的单向链表。
+ */
 typedef struct conn_queue CQ;
 struct conn_queue {
     CQ_ITEM *head;
@@ -299,6 +308,7 @@ static void cqi_free(CQ_ITEM *item) {
 
 /*
  * Creates a worker thread.
+ * create_worker是对pthread_create()简单的封装
  */
 static void create_worker(void *(*func)(void *), void *arg) {
     pthread_t       thread;
@@ -335,6 +345,7 @@ static void setup_thread(LIBEVENT_THREAD *me) {
     }
 
     /* Listen for notifications from other threads */
+    //为管道设置读事件监听，thread_libevent_process为回调函数
     event_set(&me->notify_event, me->notify_receive_fd,
               EV_READ | EV_PERSIST, thread_libevent_process, me);
     event_base_set(me->base, &me->notify_event);
@@ -344,11 +355,13 @@ static void setup_thread(LIBEVENT_THREAD *me) {
         exit(1);
     }
 
+    //为新线程创建连接CQ链表
     me->new_conn_queue = malloc(sizeof(struct conn_queue));
     if (me->new_conn_queue == NULL) {
         perror("Failed to allocate memory for connection queue");
         exit(EXIT_FAILURE);
     }
+    //初始化线程控制器内的CQ链表
     cq_init(me->new_conn_queue);
 
     if (pthread_mutex_init(&me->stats.mutex, NULL) != 0) {
@@ -356,6 +369,7 @@ static void setup_thread(LIBEVENT_THREAD *me) {
         exit(EXIT_FAILURE);
     }
 
+    //创建cache
     me->suffix_cache = cache_create("suffix", SUFFIX_SIZE, sizeof(char*),
                                     NULL, NULL);
     if (me->suffix_cache == NULL) {
@@ -383,7 +397,8 @@ static void *worker_libevent(void *arg) {
 
     register_thread_initialized();
 
-    event_base_loop(me->base, 0);
+    //新创建线程阻塞于此，等待事件
+    event_base_loop(me->base, 0);   //Libevent的事件主循环
     return NULL;
 }
 
@@ -397,15 +412,18 @@ static void thread_libevent_process(int fd, short which, void *arg) {
     CQ_ITEM *item;
     char buf[1];
 
+    //响应pipe可读事件，读取主线程向管道内写的1字节数据(见dispatch_conn_new()函数)
     if (read(fd, buf, 1) != 1)
         if (settings.verbose > 0)
             fprintf(stderr, "Can't read from libevent pipe\n");
 
     switch (buf[0]) {
     case 'c':
+    //从链接队列中取出一个conn
     item = cq_pop(me->new_conn_queue);
 
     if (NULL != item) {
+        //使用conn创建新的任务
         conn *c = conn_new(item->sfd, item->init_state, item->event_flags,
                            item->read_buffer_size, item->transport, me->base);
         if (c == NULL) {
@@ -774,7 +792,11 @@ void slab_stats_aggregate(struct thread_stats *stats, struct slab_stats *out) {
 
 /*
  * Initializes the thread subsystem, creating various worker threads.
- *
+ *  线程初始化，启动多线程模式的多个worker线程 
+    线程池初始化函数由主线程进行调用，该函数先初始化各互斥锁，然后使用calloc分配nthreads*sizeof(LIBEVENT_THREAD)个字节的内存块来管理线程池，
+    返回一个全局static变量 threads（类型为LIBEVENT_THREAD *）;然后为每个线程创建一个匿名管道（该pipe将在线程的调度中发挥作用），
+    接下来的setup_thread函数为线程设置事件监听，绑定CQ链表等初始化信息
+ * 
  * nthreads  Number of worker event handler threads to spawn
  * main_base Event base for main thread
  */
@@ -805,6 +827,7 @@ void thread_init(int nthreads, struct event_base *main_base) {
 
     item_lock_count = hashsize(power);
 
+    ////分配线程池结构数组
     item_locks = calloc(item_lock_count, sizeof(pthread_mutex_t));
     if (! item_locks) {
         perror("Can't allocate item locks");
@@ -825,6 +848,7 @@ void thread_init(int nthreads, struct event_base *main_base) {
     dispatcher_thread.base = main_base;
     dispatcher_thread.thread_id = pthread_self();
 
+    //为线程池每个线程创建读写管道
     for (i = 0; i < nthreads; i++) {
         int fds[2];
         if (pipe(fds)) {
@@ -835,6 +859,7 @@ void thread_init(int nthreads, struct event_base *main_base) {
         threads[i].notify_receive_fd = fds[0];
         threads[i].notify_send_fd = fds[1];
 
+        //填充线程结构体信息
         setup_thread(&threads[i]);
         /* Reserve three fds for the libevent base, and two for the pipe */
         stats.reserved_fds += 5;
@@ -842,6 +867,7 @@ void thread_init(int nthreads, struct event_base *main_base) {
 
     /* Create threads after we've done all the libevent setup. */
     for (i = 0; i < nthreads; i++) {
+        //为线程池创建数目为nthreads的线程，worker_libevent为线程的回调函数，
         create_worker(worker_libevent, &threads[i]);
     }
 

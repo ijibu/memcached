@@ -167,6 +167,9 @@ static rel_time_t realtime(const time_t exptime) {
     }
 }
 
+/*
+ * 统计信息初始化
+ */
 static void stats_init(void) {
     stats.curr_items = stats.total_items = stats.curr_conns = stats.total_conns = stats.conn_structs = 0;
     stats.get_cmds = stats.set_cmds = stats.get_hits = stats.get_misses = stats.evictions = stats.reclaimed = 0;
@@ -187,6 +190,9 @@ static void stats_init(void) {
     stats_prefix_init();
 }
 
+/*
+ * 统计信息重置
+ */
 static void stats_reset(void) {
     STATS_LOCK();
     stats.total_items = stats.total_conns = 0;
@@ -201,6 +207,9 @@ static void stats_reset(void) {
     item_stats_reset();
 }
 
+/*
+ * 配置信息初始化
+ */
 static void settings_init(void) {
     settings.use_cas = true;
     settings.access = 0700;
@@ -234,7 +243,7 @@ static void settings_init(void) {
 }
 
 /*
- * Adds a message header to a connection.
+ * Adds a message header to a connection.给连接添加一个头信息
  *
  * Returns 0 on success, -1 on out-of-memory.
  */
@@ -291,7 +300,9 @@ static int freecurr;
 /* Lock for connection freelist */
 static pthread_mutex_t conn_lock = PTHREAD_MUTEX_INITIALIZER;
 
-
+/*
+ * 连接初始化
+ */
 static void conn_init(void) {
     freetotal = 200;
     freecurr = 0;
@@ -588,7 +599,7 @@ static void conn_close(conn *c) {
 }
 
 /*
- * Shrinks a connection's buffers if they're too big.  This prevents
+ * Shrinks(减少，缩小) a connection's buffers if they're too big.  This prevents
  * periodic large "get" requests from permanently chewing lots of server
  * memory.
  *
@@ -5295,7 +5306,7 @@ int main (int argc, char **argv) {
         exit(EX_OSERR);
     }
     /* start up worker threads if MT mode */
-    /* 启动多线程模式的多个worker线程 */
+    /* 线程初始化，启动多线程模式的多个worker线程 */
     thread_init(settings.num_threads, main_base);
 
     if (start_assoc_maintenance_thread() == -1) {
