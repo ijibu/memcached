@@ -25,6 +25,7 @@ static void item_unlink_q(item *it);
 #define ITEM_UPDATE_INTERVAL 60
 
 #define LARGEST_ID POWER_LARGEST
+//item状态信息结构体
 typedef struct {
     uint64_t evicted;
     uint64_t evicted_nonzero;
@@ -39,6 +40,7 @@ typedef struct {
 static item *heads[LARGEST_ID];
 static item *tails[LARGEST_ID];
 static itemstats_t itemstats[LARGEST_ID];
+//记录每个slab的元素个数
 static unsigned int sizes[LARGEST_ID];
 
 void item_stats_reset(void) {
@@ -49,6 +51,7 @@ void item_stats_reset(void) {
 
 
 /* Get the next CAS id for a new item. */
+//获取新的CAS值
 uint64_t get_cas_id(void) {
     static uint64_t cas_id = 0;
     return ++cas_id;
@@ -77,6 +80,7 @@ uint64_t get_cas_id(void) {
  *
  * Returns the total size of the header.
  */
+//计算item占用空间大小
 static size_t item_make_header(const uint8_t nkey, const int flags, const int nbytes,
                      char *suffix, uint8_t *nsuffix) {
     /* suffix is defined at 40 chars elsewhere.. */
@@ -85,17 +89,20 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
 }
 
 /*@null@*/
+//分配一个item空间
 item *do_item_alloc(char *key, const size_t nkey, const int flags,
                     const rel_time_t exptime, const int nbytes,
                     const uint32_t cur_hv) {
     uint8_t nsuffix;
     item *it = NULL;
     char suffix[40];
+    //获取item占用空间大小
     size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix);
     if (settings.use_cas) {
         ntotal += sizeof(uint64_t);
     }
 
+    //寻找合适的slab
     unsigned int id = slabs_clsid(ntotal);
     if (id == 0)
         return 0;
@@ -125,7 +132,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             /* Old rare bug could cause a refcount leak. We haven't seen
              * it in years, but we leave this code in to prevent failures
              * just in case */
-            if (search->time + settings.tail_repair_time < current_time) {
+            if (search->time + settings.tail_repair_time < current_time) {  //过期
                 itemstats[id].tailrepairs++;
                 search->refcount = 1;
                 do_item_unlink_nolock(search, hv);
@@ -215,10 +222,11 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     return it;
 }
 
+//释放item
 void item_free(item *it) {
     size_t ntotal = ITEM_ntotal(it);
     unsigned int clsid;
-    assert((it->it_flags & ITEM_LINKED) == 0);
+    assert((it->it_flags & ITEM_LINKED) == 0);  //没有在hash表和LRU链中
     assert(it != heads[it->slabs_clsid]);
     assert(it != tails[it->slabs_clsid]);
     assert(it->refcount == 0);
@@ -234,6 +242,7 @@ void item_free(item *it) {
  * Returns true if an item will fit in the cache (its size does not exceed
  * the maximum for a cache entry.)
  */
+//检验某item是否有适合的slab来存储
 bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
     char prefix[40];
     uint8_t nsuffix;
@@ -247,6 +256,7 @@ bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
     return slabs_clsid(ntotal) != 0;
 }
 
+//加入LRU队列,成为新的head
 static void item_link_q(item *it) { /* item is the new head */
     item **head, **tail;
     assert(it->slabs_clsid < LARGEST_ID);
@@ -265,6 +275,7 @@ static void item_link_q(item *it) { /* item is the new head */
     return;
 }
 
+//从对应的slab的LRU链上删除
 static void item_unlink_q(item *it) {
     item **head, **tail;
     assert(it->slabs_clsid < LARGEST_ID);
@@ -288,40 +299,45 @@ static void item_unlink_q(item *it) {
     return;
 }
 
+//将item加入到hashtable和LRU链中
 int do_item_link(item *it, const uint32_t hv) {
+    //ITEM_key在memcached.h中定义
     MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
+    //判断状态,既没有在hash表LRU链中或被释放
     assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
     mutex_lock(&cache_lock);
-    it->it_flags |= ITEM_LINKED;
-    it->time = current_time;
+    it->it_flags |= ITEM_LINKED;    //设置linked状态
+    it->time = current_time;        //设置最近访问时间
 
     STATS_LOCK();
-    stats.curr_bytes += ITEM_ntotal(it);
+    stats.curr_bytes += ITEM_ntotal(it);    //增加每个item所需要的字节大小,包括item结构体和item内容大小
     stats.curr_items += 1;
     stats.total_items += 1;
     STATS_UNLOCK();
 
     /* Allocate a new CAS ID on link. */
+    //设置新CAS,CAS是memcache用来处理并发请求的一种机制
     ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
-    assoc_insert(it, hv);
-    item_link_q(it);
+    assoc_insert(it, hv);   //插入hashtable   assoc.c
+    item_link_q(it);    //加入LRU链
     refcount_incr(&it->refcount);
     mutex_unlock(&cache_lock);
 
     return 1;
 }
 
+//从hash表和LRU链中删除item
 void do_item_unlink(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     mutex_lock(&cache_lock);
     if ((it->it_flags & ITEM_LINKED) != 0) {
-        it->it_flags &= ~ITEM_LINKED;
+        it->it_flags &= ~ITEM_LINKED;   //设置为非linked
         STATS_LOCK();
         stats.curr_bytes -= ITEM_ntotal(it);
         stats.curr_items -= 1;
         STATS_UNLOCK();
-        assoc_delete(ITEM_key(it), it->nkey, hv);
-        item_unlink_q(it);
+        assoc_delete(ITEM_key(it), it->nkey, hv);   //从hash表中删除
+        item_unlink_q(it);  //从LRU链中删除
         do_item_remove(it);
     }
     mutex_unlock(&cache_lock);
@@ -342,20 +358,22 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
     }
 }
 
+//remove item
 void do_item_remove(item *it) {
     MEMCACHED_ITEM_REMOVE(ITEM_key(it), it->nkey, it->nbytes);
-    assert((it->it_flags & ITEM_SLABBED) == 0);
+    assert((it->it_flags & ITEM_SLABBED) == 0); //没有在hash表和LEU链中
     assert(it->refcount > 0);
 
-    if (refcount_decr(&it->refcount) == 0) {
+    if (refcount_decr(&it->refcount) == 0) {    //没有人在引用
         item_free(it);
     }
 }
 
+//更新item最后访问时间
 void do_item_update(item *it) {
     MEMCACHED_ITEM_UPDATE(ITEM_key(it), it->nkey, it->nbytes);
     if (it->time < current_time - ITEM_UPDATE_INTERVAL) {
-        assert((it->it_flags & ITEM_SLABBED) == 0);
+        assert((it->it_flags & ITEM_SLABBED) == 0); //没有被释放
 
         mutex_lock(&cache_lock);
         if ((it->it_flags & ITEM_LINKED) != 0) {
@@ -367,10 +385,11 @@ void do_item_update(item *it) {
     }
 }
 
+//item替换
 int do_item_replace(item *it, item *new_it, const uint32_t hv) {
     MEMCACHED_ITEM_REPLACE(ITEM_key(it), it->nkey, it->nbytes,
                            ITEM_key(new_it), new_it->nkey, new_it->nbytes);
-    assert((it->it_flags & ITEM_SLABBED) == 0);
+    assert((it->it_flags & ITEM_SLABBED) == 0); //确保没有被释放
 
     do_item_unlink(it, hv);
     return do_item_link(new_it, hv);
@@ -445,6 +464,7 @@ void do_item_stats_totals(ADD_STAT add_stats, void *c) {
                 (unsigned long long)totals.reclaimed);
 }
 
+//slab状态信息
 void do_item_stats(ADD_STAT add_stats, void *c) {
     int i;
     for (i = 0; i < LARGEST_ID; i++) {
@@ -519,6 +539,7 @@ void do_item_stats_sizes(ADD_STAT add_stats, void *c) {
 }
 
 /** wrapper around assoc_find which does the lazy expiration logic */
+//获取item
 item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     //mutex_lock(&cache_lock);
     item *it = assoc_find(key, nkey, hv);
@@ -537,7 +558,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     //mutex_unlock(&cache_lock);
     int was_found = 0;
 
-    if (settings.verbose > 2) {
+    if (settings.verbose > 2) { //输出调试信息
         int ii;
         if (it == NULL) {
             fprintf(stderr, "> NOT FOUND ");
@@ -551,20 +572,21 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     }
 
     if (it != NULL) {
+        //忽略比设置日期早的item
         if (settings.oldest_live != 0 && settings.oldest_live <= current_time &&
             it->time <= settings.oldest_live) {
             do_item_unlink(it, hv);
             do_item_remove(it);
             it = NULL;
-            if (was_found) {
+            if (was_found) {    //被忽略错误信息
                 fprintf(stderr, " -nuked by flush");
             }
-        } else if (it->exptime != 0 && it->exptime <= current_time) {
+        } else if (it->exptime != 0 && it->exptime <= current_time) { //过期
             do_item_unlink(it, hv);
             do_item_remove(it);
             it = NULL;
             if (was_found) {
-                fprintf(stderr, " -nuked by expire");
+                fprintf(stderr, " -nuked by expire");   //过期错误
             }
         } else {
             it->it_flags |= ITEM_FETCHED;
@@ -588,6 +610,7 @@ item *do_item_touch(const char *key, size_t nkey, uint32_t exptime,
 }
 
 /* expires items that are more recent than the oldest_live setting. */
+//flush all items
 void do_item_flush_expired(void) {
     int i;
     item *iter, *next;
