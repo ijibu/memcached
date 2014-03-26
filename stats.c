@@ -18,17 +18,19 @@
  * fixed-size hash of prefixes; we run the prefixes through the same
  * CRC function used by the cache hashtable.
  */
+ //结构体定义
 typedef struct _prefix_stats PREFIX_STATS;
 struct _prefix_stats {
     char         *prefix;
     size_t        prefix_len;
-    uint64_t      num_gets;
-    uint64_t      num_sets;
-    uint64_t      num_deletes;
-    uint64_t      num_hits;
+    uint64_t      num_gets;     //get次数
+    uint64_t      num_sets;     //set次数
+    uint64_t      num_deletes;  //删除次数
+    uint64_t      num_hits;     //get命中率
     PREFIX_STATS *next;
 };
 
+//初始定义大小为256个元素
 #define PREFIX_HASH_SIZE 256
 
 static PREFIX_STATS *prefix_stats[PREFIX_HASH_SIZE];
@@ -43,6 +45,7 @@ void stats_prefix_init() {
  * Cleans up all our previously collected stats. NOTE: the stats lock is
  * assumed to be held when this is called.
  */
+//清空stats设置
 void stats_prefix_clear() {
     int i;
 
@@ -64,6 +67,7 @@ void stats_prefix_clear() {
  * in the list.
  */
 /*@null@*/
+//查找一个前缀对应的结构体对象，没有则创建一个
 static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
     PREFIX_STATS *pfs;
     uint32_t hashval;
@@ -73,23 +77,28 @@ static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
     assert(key != NULL);
 
     for (length = 0; length < nkey && key[length] != '\0'; length++) {
+        //寻找前缀分隔符,此符号在settings结构体中定义
         if (key[length] == settings.prefix_delimiter) {
             bailout = false;
             break;
         }
     }
 
+    //没有找到返回空
     if (bailout) {
         return NULL;
     }
 
+    //计算hash值
     hashval = hash(key, length, 0) % PREFIX_HASH_SIZE;
 
     for (pfs = prefix_stats[hashval]; NULL != pfs; pfs = pfs->next) {
+        //比较字符串
         if (strncmp(pfs->prefix, key, length) == 0)
             return pfs;
     }
 
+    //如果没有找到,重新分配内存空间
     pfs = calloc(sizeof(PREFIX_STATS), 1);
     if (NULL == pfs) {
         perror("Can't allocate space for stats structure: calloc");
@@ -103,10 +112,12 @@ static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
         return NULL;
     }
 
+    //拷贝前缀字符串
     strncpy(pfs->prefix, key, length);
     pfs->prefix[length] = '\0';      /* because strncpy() sucks */
     pfs->prefix_len = length;
 
+    //插入到对应链表中
     pfs->next = prefix_stats[hashval];
     prefix_stats[hashval] = pfs;
 
@@ -119,6 +130,7 @@ static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
 /*
  * Records a "get" of a key.
  */
+//记录某键值的get操作次数和命中次数
 void stats_prefix_record_get(const char *key, const size_t nkey, const bool is_hit) {
     PREFIX_STATS *pfs;
 
@@ -136,6 +148,7 @@ void stats_prefix_record_get(const char *key, const size_t nkey, const bool is_h
 /*
  * Records a "delete" of a key.
  */
+//记录某key的删除次数
 void stats_prefix_record_delete(const char *key, const size_t nkey) {
     PREFIX_STATS *pfs;
 
@@ -150,6 +163,7 @@ void stats_prefix_record_delete(const char *key, const size_t nkey) {
 /*
  * Records a "set" of a key.
  */
+//记录某key被设置的次数
 void stats_prefix_record_set(const char *key, const size_t nkey) {
     PREFIX_STATS *pfs;
 
@@ -165,6 +179,7 @@ void stats_prefix_record_set(const char *key, const size_t nkey) {
  * Returns stats in textual form suitable for writing to a client.
  */
 /*@null@*/
+//输出所有信息
 char *stats_prefix_dump(int *length) {
     const char *format = "PREFIX %s get %llu hit %llu set %llu del %llu\r\n";
     PREFIX_STATS *pfs;
@@ -179,6 +194,7 @@ char *stats_prefix_dump(int *length) {
      * plus space for the "END" at the end.
      */
     STATS_LOCK();
+    //计算需要全部内存空间大小
     size = strlen(format) + total_prefix_size +
            num_prefixes * (strlen(format) - 2 /* %s */
                            + 4 * (20 - 4)) /* %llu replaced by 20-digit num */
@@ -193,11 +209,13 @@ char *stats_prefix_dump(int *length) {
     pos = 0;
     for (i = 0; i < PREFIX_HASH_SIZE; i++) {
         for (pfs = prefix_stats[i]; NULL != pfs; pfs = pfs->next) {
+            //格式化后拷贝到指定指针处
             written = snprintf(buf + pos, size-pos, format,
                            pfs->prefix, pfs->num_gets, pfs->num_hits,
                            pfs->num_sets, pfs->num_deletes);
             pos += written;
             total_written += written;
+            //判断是否拷贝正确
             assert(total_written < size);
         }
     }
@@ -209,7 +227,7 @@ char *stats_prefix_dump(int *length) {
     return buf;
 }
 
-
+//单元测试部分
 #ifdef UNIT_TEST
 
 /****************************************************************************
@@ -223,14 +241,21 @@ static char *current_test = "";
 static int test_count = 0;
 static int fail_count = 0;
 
+//输出错误信息并增加失败数目
 static void fail(char *what) { printf("\tFAIL: %s\n", what); fflush(stdout); fail_count++; }
+//数字大小比较
 static void test_equals_int(char *what, int a, int b) { test_count++; if (a != b) fail(what); }
+//结构体对象比较
 static void test_equals_ptr(char *what, void *a, void *b) { test_count++; if (a != b) fail(what); }
+//字符串比较
 static void test_equals_str(char *what, const char *a, const char *b) { test_count++; if (strcmp(a, b)) fail(what); }
+//equal测试
 static void test_equals_ull(char *what, uint64_t a, uint64_t b) { test_count++; if (a != b) fail(what); }
+//ptr not equal测试
 static void test_notequals_ptr(char *what, void *a, void *b) { test_count++; if (a == b) fail(what); }
+//ptr 不为空测试
 static void test_notnull_ptr(char *what, void *a) { test_count++; if (NULL == a) fail(what); }
-
+//find unit test
 static void test_prefix_find() {
     PREFIX_STATS *pfs1, *pfs2;
 
@@ -250,6 +275,7 @@ static void test_prefix_find() {
     test_notequals_ptr("find of shorter prefix", pfs1, pfs2);
 }
 
+//get test
 static void test_prefix_record_get() {
     PREFIX_STATS *pfs;
 
@@ -268,6 +294,7 @@ static void test_prefix_record_get() {
     test_equals_ull("hit count after get #4", 1, pfs->num_hits);
 }
 
+//delete test
 static void test_prefix_record_delete() {
     PREFIX_STATS *pfs;
 
