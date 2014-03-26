@@ -827,7 +827,7 @@ void thread_init(int nthreads, struct event_base *main_base) {
 
     item_lock_count = hashsize(power);
 
-    ////分配线程池结构数组
+    //分配线程池结构数组
     item_locks = calloc(item_lock_count, sizeof(pthread_mutex_t));
     if (! item_locks) {
         perror("Can't allocate item locks");

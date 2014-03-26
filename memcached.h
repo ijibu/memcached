@@ -300,8 +300,8 @@ struct settings {
     int chunk_size;
     int num_threads;        /* number of worker (without dispatcher) libevent threads to run */
     int num_threads_per_udp; /* number of worker threads serving each udp socket */
-    char prefix_delimiter;  /* character that marks a key prefix (for stats) */
-    int detail_enabled;     /* nonzero if we're collecting detailed stats */
+    char prefix_delimiter;  /* character that marks a key prefix (for stats) 前缀分隔符，用于命名空间使用*/
+    int detail_enabled;     /* nonzero if we're collecting detailed stats 是否启用*/
     int reqs_per_event;     /* Maximum number of io to process on each
                                io-event. */
     bool use_cas;

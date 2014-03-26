@@ -227,7 +227,7 @@ static void settings_init(void) {
     settings.chunk_size = 48;         /* space for a modest key and value */
     settings.num_threads = 4;         /* N workers */
     settings.num_threads_per_udp = 0;
-    settings.prefix_delimiter = ':';
+    settings.prefix_delimiter = ':';    //前缀分隔符，用于命名空间使用
     settings.detail_enabled = 0;
     settings.reqs_per_event = 20;
     settings.backlog = 1024;
@@ -306,6 +306,8 @@ static pthread_mutex_t conn_lock = PTHREAD_MUTEX_INITIALIZER;
 static void conn_init(void) {
     freetotal = 200;
     freecurr = 0;
+	//calloc用来配置freetotal个相邻的内存单位，每一个单位的大小为size，并
+	//返回指向第一个元素的指针。
     if ((freeconns = calloc(freetotal, sizeof(conn *))) == NULL) {
         fprintf(stderr, "Failed to allocate connection structures\n");
     }
@@ -4738,6 +4740,7 @@ static void save_pid(const char *pid_file) {
     }
 }
 
+//删除PID文件
 static void remove_pidfile(const char *pid_file) {
   if (pid_file == NULL)
       return;
@@ -4768,6 +4771,7 @@ static int sigignore(int sig) {
 /*
  * On systems that supports multiple page sizes we may reduce the
  * number of TLB-misses by using the biggest available page size
+ * Translation lookaside buffer,http://en.wikipedia.org/wiki/Translation_lookaside_buffer
  */
 static int enable_large_pages(void) {
 #if defined(HAVE_GETPAGESIZES) && defined(HAVE_MEMCNTL)
@@ -4809,15 +4813,18 @@ static int enable_large_pages(void) {
 }
 
 /**
- * Do basic sanity check of the runtime environment
+ * Do basic sanity(完整性，健全) check of the runtime environment
+ *      检查运行环境条件是否完整
  * @return true if no errors found, false if we can't use this env
  */
 static bool sanitycheck(void) {
     /* One of our biggest problems is old and bogus libevents */
+    //得到libevent的版本号
     const char *ever = event_get_version();
     if (ever != NULL) {
         if (strncmp(ever, "1.", 2) == 0) {
             /* Require at least 1.3 (that's still a couple of years old) */
+            //sdigit(int c)，检查参数 c 是否为阿拉伯数字0 到9。
             if ((ever[2] == '1' || ever[2] == '2') && !isdigit(ever[3])) {
                 fprintf(stderr, "You are using libevent %s.\nPlease upgrade to"
                         " a more recent version (1.3 or newer)\n",
@@ -4832,8 +4839,8 @@ static bool sanitycheck(void) {
 
 int main (int argc, char **argv) {
     int c;
-    bool lock_memory = false;
-    bool do_daemonize = false;
+    bool lock_memory = false;       //固定内存大小
+    bool do_daemonize = false;      //是否以守护进程模式运行
     bool preallocate = false;
     int maxcore = 0;
     char *username = NULL;
@@ -4870,6 +4877,7 @@ int main (int argc, char **argv) {
         NULL
     };
 
+    //检查运行条件是否满足，主要是libevent的是版本是否满足。
     if (!sanitycheck()) {
         return EX_OSERR;
     }
@@ -4883,6 +4891,7 @@ int main (int argc, char **argv) {
     settings_init();
 
     /* set stderr non-buffering (for running under, say, daemontools) */
+    //设置为无缓冲区的IO
     setbuf(stderr, NULL);
 
     /* process arguments */
@@ -4926,10 +4935,12 @@ int main (int argc, char **argv) {
 
         case 'a':
             /* access for unix domain socket, as octal mask (like chmod)*/
+            //strtol将字符串转换成长整型数
             settings.access= strtol(optarg,NULL,8);
             break;
 
         case 'U':
+            //atoi将字符串转换成整型数
             settings.udpport = atoi(optarg);
             udp_specified = true;
             break;
@@ -4970,9 +4981,11 @@ int main (int argc, char **argv) {
                     return 1;
                 }
                 snprintf(p, len, "%s,%s", settings.inter, optarg);
+                //释放内存
                 free(settings.inter);
                 settings.inter = p;
             } else {
+                //strdup复制字符串，先申请内存，然后在复制内容，返回地址
                 settings.inter= strdup(optarg);
             }
             break;
@@ -4996,6 +5009,7 @@ int main (int argc, char **argv) {
             pid_file = optarg;
             break;
         case 'f':
+            //atof将字符串转换成浮点数型
             settings.factor = atof(optarg);
             if (settings.factor <= 1.0) {
                 fprintf(stderr, "Factor must be greater than 1\n");
@@ -5051,6 +5065,7 @@ int main (int argc, char **argv) {
             break;
         case 'B':
             protocol_specified = true;
+            //strcmp比较字符串的ASCII值
             if (strcmp(optarg, "auto") == 0) {
                 settings.binding_protocol = negotiating_prot;
             } else if (strcmp(optarg, "binary") == 0) {
@@ -5108,6 +5123,7 @@ int main (int argc, char **argv) {
 
             while (*subopts != '\0') {
 
+            //getsubopt分析字符串中的子选项
             switch (getsubopt(&subopts, subopts_tokens, &subopts_value)) {
             case MAXCONNS_FAST:
                 settings.maxconns_fast = true;
@@ -5171,6 +5187,7 @@ int main (int argc, char **argv) {
      * Use one workerthread to serve each UDP port if the user specified
      * multiple ports
      */
+     //strchr查找字符串中第一个出现的子字符串
     if (settings.inter != NULL && strchr(settings.inter, ',')) {
         settings.num_threads_per_udp = 1;
     } else {
@@ -5194,6 +5211,8 @@ int main (int argc, char **argv) {
         settings.port = settings.udpport;
     }
 
+    //http://www.cnblogs.com/niocai/archive/2012/04/01/2428128.html
+    //配置进程的软硬件资源限制
     if (maxcore != 0) {
         struct rlimit rlim_new;
         /*
@@ -5224,7 +5243,6 @@ int main (int argc, char **argv) {
      * If needed, increase rlimits to allow as many connections
      * as needed.
      */
-
     if (getrlimit(RLIMIT_NOFILE, &rlim) != 0) {
         fprintf(stderr, "failed to getrlimit number of files\n");
         exit(EX_OSERR);
@@ -5293,6 +5311,7 @@ int main (int argc, char **argv) {
     /* 其他东西的初始化 */
     stats_init();
     assoc_init(settings.hashpower_init);
+    //连接初始化，申请一批内存
     conn_init();
     slabs_init(settings.maxbytes, settings.factor, preallocate);
 
@@ -5404,11 +5423,11 @@ int main (int argc, char **argv) {
         remove_pidfile(pid_file);
     /* Clean up strdup() call for bind() address */
     if (settings.inter)
-      free(settings.inter);
+        free(settings.inter);
     if (l_socket)
-      free(l_socket);
+        free(l_socket);
     if (u_socket)
-      free(u_socket);
+        free(u_socket);
 
     return retval;
 }
