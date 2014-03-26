@@ -10,7 +10,17 @@
  *
  * The rest of the file is licensed under the BSD license.  See LICENSE.
  */
+/*
+memcache对item信息的存储是采用的hash表的形式,而item的内容则是存储在slab中,本篇文章只介绍item在hash表中的存储。
+item经过hash后存储在一个桶中,这个桶是hash表的一个元素,在同一个桶中,item是通过链表来存储的。这部分的初始化工作
+在memcached.c的main函数中,初始化时,分配了2^16个元素的hash表,如果hash表比较大了,需要重新申请内存扩充。那什么时候
+需要扩充呢,当每个item被加入到hash表中时,程序会去计算item的数量,如果item的数量大于2^16的1.5倍,即开始扩充,
+这部分的代码在assoc_insert函数中。
 
+扩充的过程
+    hash表在扩充的时候会去申请一个是原来2被大小的空间,然后启动一个线程去同步原hash表中的item数据,如果在扩充的时候,
+    有个请求item的请求,则会判断这个item是在新的hash表中还是原来的hash表中,然后再去各自的hash表的桶中查找。
+*/
 #include "memcached.h"
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -32,24 +42,29 @@ typedef  unsigned long  int  ub4;   /* unsigned 4-byte quantities */
 typedef  unsigned       char ub1;   /* unsigned 1-byte quantities */
 
 /* how many powers of 2's worth of buckets we use */
+//2的幂大小，决定桶的个数
 unsigned int hashpower = HASHPOWER_DEFAULT;
 
 #define hashsize(n) ((ub4)1<<(n))
 #define hashmask(n) (hashsize(n)-1)
 
 /* Main hash table. This is where we look except during expansion. */
+//hash表
 static item** primary_hashtable = 0;
 
 /*
  * Previous hash table. During expansion, we look here for keys that haven't
  * been moved over to the primary yet.
  */
+//hash表扩充后的旧hash表
 static item** old_hashtable = 0;
 
 /* Number of items in the hash table. */
+//hash表中item个数
 static unsigned int hash_items = 0;
 
 /* Flag: Are we in the middle of expanding now? */
+//是否在扩充中标识
 static bool expanding = false;
 static bool started_expanding = false;
 
@@ -57,12 +72,15 @@ static bool started_expanding = false;
  * During expansion we migrate values with bucket granularity; this is how
  * far we've gotten so far. Ranges from 0 .. hashsize(hashpower - 1) - 1.
  */
+//扩充过程中,桶迁移到新hash表的进度,值的范围是0 .. hashsize(hashpower - 1) - 1
 static unsigned int expand_bucket = 0;
 
+//初始化
 void assoc_init(const int hashtable_init) {
     if (hashtable_init) {
         hashpower = hashtable_init;
     }
+    //为hash表分配内存空间
     primary_hashtable = calloc(hashsize(hashpower), sizeof(void *));
     if (! primary_hashtable) {
         fprintf(stderr, "Failed to init hashtable.\n");
@@ -74,14 +92,16 @@ void assoc_init(const int hashtable_init) {
     STATS_UNLOCK();
 }
 
+//查找item
 item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
     item *it;
     unsigned int oldbucket;
 
+    //寻找在哪个桶中
     if (expanding &&
         (oldbucket = (hv & hashmask(hashpower - 1))) >= expand_bucket)
     {
-        it = old_hashtable[oldbucket];
+        it = old_hashtable[oldbucket];  //扩充过程中,并且要寻找的item还在旧hash 表中
     } else {
         it = primary_hashtable[hv & hashmask(hashpower)];
     }
@@ -102,7 +122,7 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
 
 /* returns the address of the item pointer before the key.  if *item == 0,
    the item wasn't found */
-
+//获取item的指针的指针
 static item** _hashitem_before (const char *key, const size_t nkey, const uint32_t hv) {
     item **pos;
     unsigned int oldbucket;
@@ -122,6 +142,7 @@ static item** _hashitem_before (const char *key, const size_t nkey, const uint32
 }
 
 /* grows the hashtable to the next power of 2. */
+//扩充hash表为原先的两倍
 static void assoc_expand(void) {
     old_hashtable = primary_hashtable;
 
@@ -147,10 +168,12 @@ static void assoc_start_expand(void) {
     if (started_expanding)
         return;
     started_expanding = true;
+    //唤醒扩充线程
     pthread_cond_signal(&maintenance_cond);
 }
 
 /* Note: this isn't an assoc_update.  The key must not already exist to call this */
+//item插入hash表,并作为对应桶内的head元素
 int assoc_insert(item *it, const uint32_t hv) {
     unsigned int oldbucket;
 
@@ -167,6 +190,7 @@ int assoc_insert(item *it, const uint32_t hv) {
     }
 
     hash_items++;
+    //当item个数大于桶的个数的1.5倍的时候,扩充hash表
     if (! expanding && hash_items > (hashsize(hashpower) * 3) / 2) {
         assoc_start_expand();
     }
@@ -175,6 +199,7 @@ int assoc_insert(item *it, const uint32_t hv) {
     return 1;
 }
 
+//从hash表中删除item
 void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
     item **before = _hashitem_before(key, nkey, hv);
 
@@ -195,7 +220,7 @@ void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
     assert(*before != 0);
 }
 
-
+//是否可以执行扩充操作flag
 static volatile int do_run_maintenance_thread = 1;
 
 #define DEFAULT_HASH_BULK_MOVE 1
@@ -218,14 +243,17 @@ static void *assoc_maintenance_thread(void *arg) {
             for (it = old_hashtable[expand_bucket]; NULL != it; it = next) {
                 next = it->h_next;
 
+                //hash属于哪个桶
                 bucket = hash(ITEM_key(it), it->nkey, 0) & hashmask(hashpower);
                 it->h_next = primary_hashtable[bucket];
                 primary_hashtable[bucket] = it;
             }
 
+            //置空
             old_hashtable[expand_bucket] = NULL;
 
             expand_bucket++;
+            //扩充结束
             if (expand_bucket == hashsize(hashpower - 1)) {
                 expanding = false;
                 free(old_hashtable);
@@ -263,6 +291,7 @@ static void *assoc_maintenance_thread(void *arg) {
 
 static pthread_t maintenance_tid;
 
+//新建线程启动桶的扩充
 int start_assoc_maintenance_thread() {
     int ret;
     char *env = getenv("MEMCACHED_HASH_BULK_MOVE");
@@ -280,6 +309,7 @@ int start_assoc_maintenance_thread() {
     return 0;
 }
 
+//结束线程
 void stop_assoc_maintenance_thread() {
     mutex_lock(&cache_lock);
     do_run_maintenance_thread = 0;
@@ -289,5 +319,3 @@ void stop_assoc_maintenance_thread() {
     /* Wait for the maintenance thread to stop */
     pthread_join(maintenance_tid, NULL);
 }
-
-
