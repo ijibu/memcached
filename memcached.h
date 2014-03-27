@@ -338,14 +338,14 @@ typedef struct _stritem {
     struct _stritem *next;
     struct _stritem *prev;
     struct _stritem *h_next;    /* hash chain next */
-    rel_time_t      time;       /* least recent access */
-    rel_time_t      exptime;    /* expire time */
-    int             nbytes;     /* size of data */
-    unsigned short  refcount;
+    rel_time_t      time;       /* least recent access 最近访问时间*/
+    rel_time_t      exptime;    /* expire time 过期时间*/
+    int             nbytes;     /* size of data 数据部分的大小*/
+    unsigned short  refcount;	//引用次数
     uint8_t         nsuffix;    /* length of flags-and-length string */
-    uint8_t         it_flags;   /* ITEM_* above */
-    uint8_t         slabs_clsid;/* which slab class we're in */
-    uint8_t         nkey;       /* key length, w/terminating null and padding */
+    uint8_t         it_flags;   /* ITEM_* above 标志位*/
+    uint8_t         slabs_clsid;/* which slab class we're in em 是从哪个 slabclass 分配而来*/
+    uint8_t         nkey;       /* key length, w/terminating null and padding key的长度*/
     /* this odd type prevents type-punning issues when we do
      * the little shuffle to save space when not using CAS. */
     union {

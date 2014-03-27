@@ -191,7 +191,7 @@ static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
         ptr += p->size;
     }
 }
-
+//分配一个新的 slab
 static int do_slabs_newslab(const unsigned int id) {
     slabclass_t *p = &slabclass[id];
     int len = settings.slab_reassign ? settings.item_size_max
@@ -217,6 +217,8 @@ static int do_slabs_newslab(const unsigned int id) {
 }
 
 /*@null@*/
+//从指定的 slabclass, 即 slabclass[id], 分配大小为 size 的内存块供申请者使用
+//分配的原则是, 优先从 slots 指向的空闲链表中分配, 空闲链表没有, 才从 slab 中分配一个空闲的 chunk.
 static void *do_slabs_alloc(const size_t size, unsigned int id) {
     slabclass_t *p;
     void *ret = NULL;
@@ -254,6 +256,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     return ret;
 }
 
+//把 ptr 指向的 item 归还给 slabclass[id]操作很简单, 把 ptr 指向的 item 挂在 slots 空闲链表的最前面
 static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     slabclass_t *p;
     item *it;
@@ -266,6 +269,7 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     MEMCACHED_SLABS_FREE(size, id, ptr);
     p = &slabclass[id];
 
+    /* 把 item 归还给slots指向的空闲链表, 插在链表的最前面 */
     it = (item *)ptr;
     it->it_flags |= ITEM_SLABBED;
     it->prev = 0;

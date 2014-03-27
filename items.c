@@ -89,7 +89,7 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
 }
 
 /*@null@*/
-//分配一个item空间
+//从 slab 系统分配一个空闲 item
 item *do_item_alloc(char *key, const size_t nkey, const int flags,
                     const rel_time_t exptime, const int nbytes,
                     const uint32_t cur_hv) {
@@ -143,6 +143,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         }
 
         /* Expired or flushed */
+        /* 先检查 LRU 队列最后一个 item 是否超时, 超时的话就把这个 item 分配给用户 */  
         if ((search->exptime != 0 && search->exptime < current_time)
             || (search->time <= oldest_live && oldest_live <= current_time)) {
             itemstats[id].reclaimed++;
@@ -151,10 +152,13 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             }
             it = search;
             slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
+            /* 把这个 item 从 LRU 队列和哈希表中移除 */
             do_item_unlink_nolock(it, hv);
             /* Initialize the item block: */
             it->slabs_clsid = 0;
-        } else if ((it = slabs_alloc(ntotal, id)) == NULL) {
+        } else if ((it = slabs_alloc(ntotal, id)) == NULL) {   
+            /* 没有超时的 item, 那就尝试从 slabclass 分配, 运气不好的话, 分配失败, 
+           那就把 LRU 队列最后一个 item 剔除, 然后分配给用户 */
             tried_alloc = 1;
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
@@ -168,6 +172,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
                 }
                 it = search;
                 slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
+                /* 把这个 item 从 LRU 队列和哈希表中移除 */ 
                 do_item_unlink_nolock(it, hv);
                 /* Initialize the item block: */
                 it->slabs_clsid = 0;
@@ -191,6 +196,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         break;
     }
 
+     /* LRU 队列是空的, 或者锁住了, 那就只能从 slabclass 分配内存 */ 
     if (!tried_alloc && (tries == 0 || search == NULL))
         it = slabs_alloc(ntotal, id);
 
@@ -205,6 +211,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
 
     /* Item initialization can happen outside of the lock; the item's already
      * been removed from the slab LRU.
+     * 顺便对 item 做一些初始化
      */
     it->refcount = 1;     /* the caller will have a reference */
     mutex_unlock(&cache_lock);
@@ -300,6 +307,8 @@ static void item_unlink_q(item *it) {
 }
 
 //将item加入到hashtable和LRU链中
+//形成了一个完成的 item 后, 就要把它放入两个数据结构中, 一是 memcached 的哈希表,
+//memcached 运行过程中只有一个哈希表, 二是 item 所在的 slabclass 的 LRU 队列.
 int do_item_link(item *it, const uint32_t hv) {
     //ITEM_key在memcached.h中定义
     MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
@@ -318,15 +327,15 @@ int do_item_link(item *it, const uint32_t hv) {
     /* Allocate a new CAS ID on link. */
     //设置新CAS,CAS是memcache用来处理并发请求的一种机制
     ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
-    assoc_insert(it, hv);   //插入hashtable   assoc.c
-    item_link_q(it);    //加入LRU链
+    assoc_insert(it, hv);   //把 item插入hashtable   assoc.c
+    item_link_q(it);    //把 item放入LRU链
     refcount_incr(&it->refcount);
     mutex_unlock(&cache_lock);
 
     return 1;
 }
 
-//从hash表和LRU链中删除item
+//从hash表和LRU链中删除item,而且还释放掉 item 所占的内存 (其实只是把 item 放到空闲链表中).
 void do_item_unlink(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     mutex_lock(&cache_lock);
@@ -338,7 +347,7 @@ void do_item_unlink(item *it, const uint32_t hv) {
         STATS_UNLOCK();
         assoc_delete(ITEM_key(it), it->nkey, hv);   //从hash表中删除
         item_unlink_q(it);  //从LRU链中删除
-        do_item_remove(it);
+        do_item_remove(it); /* 释放 item 所占的内存 */
     }
     mutex_unlock(&cache_lock);
 }
@@ -539,9 +548,15 @@ void do_item_stats_sizes(ADD_STAT add_stats, void *c) {
 }
 
 /** wrapper around assoc_find which does the lazy expiration logic */
-//获取item
+/*
+ * 获取item
+ *  根据 key 找对应的 item, 为了加快查找速度, memcached 使用一个哈希表对 key 和 item 所在的内存
+ *  地址做映射. do_item_get 直接从哈希表中查找就可以了, 当然找到了还要检查 item 是否超时. 超时了的 item
+ *  将从哈希表和 LRU 队列中删除掉
+ */
 item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     //mutex_lock(&cache_lock);
+    /* 从哈希表中找 item */ 
     item *it = assoc_find(key, nkey, hv);
     if (it != NULL) {
         refcount_incr(&it->refcount);
@@ -571,6 +586,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
         }
     }
 
+    /* 找到了, 然后检查是否超时 */
     if (it != NULL) {
         //忽略比设置日期早的item
         if (settings.oldest_live != 0 && settings.oldest_live <= current_time &&
